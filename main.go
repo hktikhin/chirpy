@@ -31,6 +31,24 @@ type User struct {
 	Email     string    `json:"email"`
 }
 
+type Chirp struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Body      string    `json:"body"`
+	UserID    uuid.UUID `json:"user_id"`
+}
+
+func databaseChirpToChirp(dbChirp database.Chirp) Chirp {
+	return Chirp{
+		ID:        dbChirp.ID,
+		CreatedAt: dbChirp.CreatedAt,
+		UpdatedAt: dbChirp.UpdatedAt,
+		Body:      dbChirp.Body,
+		UserID:    dbChirp.UserID,
+	}
+}
+
 func databaseUserToUser(dbUser database.User) User {
 	return User{
 		ID:        dbUser.ID,
@@ -123,12 +141,10 @@ func getCleanedBody(body string) string {
 	return strings.Join(words, " ")
 }
 
-func handlerCreateChirp(w http.ResponseWriter, r *http.Request) {
+func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Body string `json:"body"`
-	}
-	type returnVals struct {
-		CleanedBody string `json:"cleaned_body"`
+		Body   string    `json:"body"`
+		UserID uuid.UUID `json:"user_id"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -143,8 +159,19 @@ func handlerCreateChirp(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, 400, "Chirp is too long")
 		return
 	}
-	
-	respondWithJSON(w, 200, returnVals{CleanedBody: getCleanedBody(params.Body)})
+	dbChirp, err := cfg.db.CreateChirp(
+		r.Context(),
+		database.CreateChirpParams{
+			Body:   getCleanedBody(params.Body),
+			UserID: params.UserID,
+		},
+	)
+	if err != nil {
+		log.Printf("Error creating chirp: %s", err)
+		respondWithError(w, 400, "Error creating chirp")
+		return
+	}
+	respondWithJSON(w, 201, databaseChirpToChirp(dbChirp))
 }
 
 func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) {
@@ -160,14 +187,14 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 		respondWithError(w, 400, "Invalid JSON")
 		return
 	}
-	dbuser, err := cfg.db.CreateUser(r.Context(), params.Email)
+	dbUser, err := cfg.db.CreateUser(r.Context(), params.Email)
 	if err != nil {
 		log.Printf("Error creating user: %s", err)
 		respondWithError(w, 400, "Error creating user")
 		return
 	}
 
-	respondWithJSON(w, 201, databaseUserToUser(dbuser))
+	respondWithJSON(w, 201, databaseUserToUser(dbUser))
 }
 
 func main() {
@@ -190,7 +217,7 @@ func main() {
 
 	mux.HandleFunc("GET /api/healthz", handlerHealthz)
 
-	mux.HandleFunc("POST /api/chirps", handlerCreateChirp)
+	mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
 
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
 

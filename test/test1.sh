@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ────────────────────────────────────────────────
-#          Chirpy API Tests – Clean Start
+#     Chirpy API Tests – Clean Start (2026 edition)
 # ────────────────────────────────────────────────
 
 BASE_URL="http://localhost:8080"
@@ -14,66 +14,115 @@ echo "=== Chirpy API Tests ==="
 echo "Started: $(date)"
 echo ""
 
+# 1–2: Basic health & metrics
 echo "1. Health check"
 curl -s -i "$BASE_URL/api/healthz" | head -n 1
 echo ""
 
-echo "2. Admin metrics (very start)"
-curl -s -i "$BASE_URL/admin/metrics" | grep -E "HTTP/|Content-Length"
+echo "2. Admin metrics (at start)"
+curl -s -i "$BASE_URL/admin/metrics" | grep -E "HTTP/|Content-Length|<p>"
 echo ""
 
-# ─── Reset early so every run starts clean ───────────────────────────────
-echo "3. Reset database (delete all users) – expect 200 when PLATFORM=dev"
-curl -i -X POST "$BASE_URL/admin/reset"
+# 3: Reset DB → clean state
+echo "3. Reset database (delete all users) – expect 200 in dev"
+RESET_RESP=$(curl -s -i -X POST "$BASE_URL/admin/reset")
+echo "$RESET_RESP" | head -n 1
 echo ""
 
-echo "4. Metrics right after reset (fileserverHits should be reset to 0)"
-curl -i "$BASE_URL/admin/metrics"
+# 4: Metrics after reset
+echo "4. Metrics right after reset"
+curl -s -i "$BASE_URL/admin/metrics" | grep -E "HTTP/|Content-Length|<p>"
 echo ""
 
-# ─── Now safe to create users ────────────────────────────────────────────
+# ─── Users ───────────────────────────────────────
 echo "5. Create user – Alice"
-curl -i -X POST "$BASE_URL/api/users" \
+ALICE_RESP=$(curl -s -X POST "$BASE_URL/api/users" \
      -H "Content-Type: application/json" \
-     -d '{"email": "alice@example.com"}'
+     -d '{"email": "alice@example.com"}')
+
+echo "$ALICE_RESP" | head -n 6   # show status + first lines of body
 echo ""
 
 echo "6. Create user – Bob"
-curl -i -X POST "$BASE_URL/api/users" \
+BOB_RESP=$(curl -s -X POST "$BASE_URL/api/users" \
      -H "Content-Type: application/json" \
-     -d '{"email": "bob@testing.dev"}'
+     -d '{"email": "bob@testing.dev"}')
+
+echo "$BOB_RESP" | head -n 6
 echo ""
 
-echo "7. Try invalid JSON → should be 400"
-curl -i -X POST "$BASE_URL/api/users" \
+echo "7. Create user – invalid JSON → should 400"
+curl -s -i -X POST "$BASE_URL/api/users" \
      -H "Content-Type: application/json" \
-     -d '{email: "broken"}'
+     -d '{email: "broken"}' | head -n 3
 echo ""
 
-# ─── Chirp validation & profanity ────────────────────────────────────────
-echo "8. Validate chirp – normal"
-curl -i -X POST "$BASE_URL/api/validate_chirp" \
-     -H "Content-Type: application/json" \
-     -d '{"body": "Hello beautiful world!"}'
+# ─── Extract real user ID (try Alice first, fallback to Bob) ──────────────
+USER_ID=$(echo "$ALICE_RESP" | grep -oE '"id":"[0-9a-f-]{36}"' | head -1 | cut -d'"' -f4)
+
+if [ -z "$USER_ID" ]; then
+  USER_ID=$(echo "$BOB_RESP" | grep -oE '"id":"[0-9a-f-]{36}"' | head -1 | cut -d'"' -f4)
+fi
+
+if [ -z "$USER_ID" ]; then
+  echo -e "${RED}ERROR: Could not extract any valid user ID${NC}"
+  echo "Alice response snippet:"
+  echo "$ALICE_RESP" | head -n 8
+  echo "→ Check if POST /api/users returns 201 + {\"id\": …}"
+  exit 1
+fi
+
+echo -e "${GREEN}Using real user ID:${NC} $USER_ID"
 echo ""
 
-echo "9. Validate chirp – way too long"
-LONG=$(printf 'z%.0s' {1..300})
-curl -i -X POST "$BASE_URL/api/validate_chirp" \
+# ─── Chirp creation tests ────────────────────────────────────────────────
+echo "11. Create chirp – valid"
+curl -i -X POST "$BASE_URL/api/chirps" \
      -H "Content-Type: application/json" \
-     -d "{\"body\": \"$LONG\"}"
+     -d '{
+           "body": "This is my first chirp :chirpy:",
+           "user_id": "'"$USER_ID"'"
+         }' | head -n 8
 echo ""
 
-echo "10. Profanity filter test"
-curl -i -X POST "$BASE_URL/api/validate_chirp" \
+echo "12. Create chirp – profanity should be cleaned"
+curl -i -X POST "$BASE_URL/api/chirps" \
      -H "Content-Type: application/json" \
-     -d '{"body": "What a Kerfuffle sharbert Fornax moment!"}'
+     -d '{
+           "body": "What a kerfuffle sharbert fornax day!",
+           "user_id": "'"$USER_ID"'"
+         }' | head -n 8
 echo ""
 
-echo -e "${GREEN}All tests finished.${NC}\n"
+echo "13. Create chirp – too long → should 400"
+LONG_BODY=$(printf 'z%.0s' {1..300})
+curl -i -X POST "$BASE_URL/api/chirps" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "body": "'"$LONG_BODY"'",
+           "user_id": "'"$USER_ID"'"
+         }'
+echo ""
 
-echo "Quick reminders:"
-echo "  • Make sure PLATFORM=dev is set in .env"
-echo "  • sqlc generate was run after adding DeleteAllUsers"
-echo "  • No trailing space in mux.HandleFunc(\"POST /api/users\", ...)"
+echo "14. Create chirp – missing user_id → should fail"
+curl -i -X POST "$BASE_URL/api/chirps" \
+     -H "Content-Type: application/json" \
+     -d '{"body": "No user id here"}'
+echo ""
+
+echo "15. Create chirp – invalid uuid format → should fail"
+curl -i -X POST "$BASE_URL/api/chirps" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "body": "Bad uuid test",
+           "user_id": "not-a-uuid"
+         }' 
+         
+echo ""
+
+echo -e "${GREEN}Tests finished.${NC}\n"
+echo "Quick status:"
+echo "  • If chirp creation still fails with foreign key → user creation is broken"
+echo "  • If 404 on /api/chirps → check mux.HandleFunc(\"POST /api/chirps\", …)"
+echo "  • If 404 on /api/users → same, check route registration (no trailing space!)"
 echo ""
