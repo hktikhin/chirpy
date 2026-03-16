@@ -174,6 +174,23 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 	respondWithJSON(w, 201, databaseChirpToChirp(dbChirp))
 }
 
+func (cfg *apiConfig) handlerGetChirps(w http.ResponseWriter, r *http.Request) {
+	dbChirps, err := cfg.db.GetAllChirps(
+		r.Context(),
+	)
+	if err != nil {
+		log.Printf("Could not get chirps: %s", err)
+		respondWithError(w, 500, "Could not get chirps")
+		return
+	}
+	chirps := []Chirp{}
+	for _, dbChirp := range dbChirps {
+		chirps = append(chirps, databaseChirpToChirp(dbChirp))
+	}
+
+	respondWithJSON(w, 200, chirps)
+}
+
 func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Email string `json:"email"`
@@ -216,6 +233,8 @@ func main() {
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(fsHandler))
 
 	mux.HandleFunc("GET /api/healthz", handlerHealthz)
+
+	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetChirps)
 
 	mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
 
