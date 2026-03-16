@@ -191,6 +191,27 @@ func (cfg *apiConfig) handlerGetChirps(w http.ResponseWriter, r *http.Request) {
 	respondWithJSON(w, 200, chirps)
 }
 
+func (cfg *apiConfig) handlerGetChirpByID(w http.ResponseWriter, r *http.Request) {
+	rawID := r.PathValue("chirpID")
+	chirpID, err := uuid.Parse(rawID)
+	if err != nil {
+		respondWithError(w, 400, "Invalid chirp ID format")
+		return
+	}
+
+	dbChirp, err := cfg.db.GetChirpByID(
+		r.Context(),
+		chirpID,
+	)
+	if err != nil {
+		log.Printf("Chirp with that id not found: %s", err)
+		respondWithError(w, 404, "Chirp with that id not found")
+		return
+	}
+
+	respondWithJSON(w, 200, databaseChirpToChirp(dbChirp))
+}
+
 func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Email string `json:"email"`
@@ -235,6 +256,8 @@ func main() {
 	mux.HandleFunc("GET /api/healthz", handlerHealthz)
 
 	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetChirps)
+
+	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerGetChirpByID)
 
 	mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
 
