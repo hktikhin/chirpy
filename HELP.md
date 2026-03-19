@@ -24,3 +24,6 @@ sqlc generate
 go get github.com/google/uuid
 go get github.com/lib/pq
 go get github.com/joho/godotenv
+
+go get github.com/alexedwards/argon2id
+go get -u github.com/golang-jwt/jwt/v5
