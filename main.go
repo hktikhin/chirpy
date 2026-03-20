@@ -269,14 +269,11 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 
 func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Email     string `json:"email"`
-		Password  string `json:"password"`
-		ExpiresIn int    `json:"expires_in_seconds"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 	decoder := json.NewDecoder(r.Body)
-	params := parameters{
-		ExpiresIn: 3600,
-	}
+	params := parameters{}
 	err := decoder.Decode(&params)
 	if err != nil {
 		log.Printf("Error decoding parameters: %s", err)
@@ -296,20 +293,89 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, 401, "Password Mismatch")
 		return
 	}
-	signedToken, err := auth.MakeJWT(dbUser.ID, cfg.tokenSecret, time.Duration(params.ExpiresIn)*time.Second)
+	accessToken, err := auth.MakeJWT(dbUser.ID, cfg.tokenSecret, time.Duration(3600)*time.Second)
 	if err != nil {
 		log.Printf("Error generating jwt token: %s", err)
 		respondWithError(w, 401, "Error generating jwt token")
 		return
 	}
 
+	refreshToken := auth.MakeRefreshToken()
+	err = cfg.db.CreateRefreshToken(
+		r.Context(),
+		database.CreateRefreshTokenParams{
+			Token:     refreshToken,
+			UserID:    dbUser.ID,
+			ExpiresAt: time.Now().Add(time.Hour * 24 * 60),
+		},
+	)
+	if err != nil {
+		log.Printf("Error storing refresh token: %s", err)
+		respondWithError(w, 401, "Error storing refrsh token")
+		return
+	}
+
 	respondWithJSON(w, 200, struct {
 		User
+		Token        string `json:"token"`
+		RefreshToken string `json:"refresh_token"`
+	}{
+		User:         databaseUserToUser(dbUser),
+		Token:        accessToken,
+		RefreshToken: refreshToken,
+	})
+}
+
+func (cfg *apiConfig) handlerRefresh(w http.ResponseWriter, r *http.Request) {
+	refreshToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error extracting refresh token: %s", err)
+		respondWithError(w, 401, fmt.Sprintf("Error extracting refresh token: %s", err))
+		return
+	}
+	dbRefreshToken, err := cfg.db.GetUserFromRefreshToken(r.Context(), refreshToken)
+	if err != nil {
+		log.Printf("Refresh token not existed: %s", err)
+		respondWithError(w, 401, "Refresh token not existed")
+		return
+	}
+	if dbRefreshToken.ExpiresAt.Before(time.Now()) || dbRefreshToken.RevokedAt.Valid {
+		log.Printf("Invalid refresh token")
+		respondWithError(w, 401, "Invalid refresh token")
+		return
+	}
+	accessToken, err := auth.MakeJWT(dbRefreshToken.UserID, cfg.tokenSecret, time.Duration(3600)*time.Second)
+	if err != nil {
+		log.Printf("Error generating jwt token: %s", err)
+		respondWithError(w, 401, "Error generating jwt token")
+		return
+	}
+	respondWithJSON(w, 200, struct {
 		Token string `json:"token"`
 	}{
-		User:  databaseUserToUser(dbUser),
-		Token: signedToken,
+		Token: accessToken,
 	})
+}
+
+func (cfg *apiConfig) handlerRevoke(w http.ResponseWriter, r *http.Request) {
+	refreshToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error extracting refresh token: %s", err)
+		respondWithError(w, 401, fmt.Sprintf("Error extracting refresh token: %s", err))
+		return
+	}
+	rowsAffected, err := cfg.db.RevokeRefreshToken(r.Context(), refreshToken)
+	if rowsAffected == 0 {
+		log.Printf("Active refresh token not existed.")
+		respondWithError(w, 401, "Active refresh token not existed.")
+		return
+	}
+	if err != nil {
+		log.Printf("Error revoking refresh token: %s", err)
+		respondWithError(w, 401, "Error revoking refresh token")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func main() {
@@ -342,6 +408,10 @@ func main() {
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
 
 	mux.HandleFunc("POST /api/login", apiCfg.handlerLogin)
+
+	mux.HandleFunc("POST /api/refresh", apiCfg.handlerRefresh)
+
+	mux.HandleFunc("POST /api/revoke", apiCfg.handlerRevoke)
 
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
 
