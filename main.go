@@ -69,6 +69,15 @@ func databaseUserToUser(dbUser database.User) User {
 	}
 }
 
+func databaseUpdateUserRowToUser(row database.UpdateUserRow) User {
+	return User{
+		ID:        row.ID,
+		CreatedAt: row.CreatedAt,
+		UpdatedAt: row.UpdatedAt,
+		Email:     row.Email,
+	}
+}
+
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 	return http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
@@ -378,6 +387,52 @@ func (cfg *apiConfig) handlerRevoke(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (cfg *apiConfig) handlerUpdateUser(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	signedToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error extracting api token: %s", err)
+		respondWithError(w, 401, fmt.Sprintf("Error extracting api token: %s", err))
+		return
+	}
+	userID, err := auth.ValidateJWT(signedToken, cfg.tokenSecret)
+	if err != nil {
+		log.Printf("Fail to validate api token: %s", err)
+		respondWithError(w, 401, "Fail to validate api token")
+		return
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err = decoder.Decode(&params)
+	if err != nil {
+		log.Printf("Error decoding parameters: %s", err)
+		respondWithError(w, 400, "Invalid JSON")
+		return
+	}
+	hashPassword, err := auth.HashPassword(params.Password)
+	if err != nil {
+		respondWithError(w, 500, "Couldn't hash password")
+		return
+	}
+	dbUser, err := cfg.db.UpdateUser(r.Context(), database.UpdateUserParams{
+		ID:             userID,
+		Email:          params.Email,
+		HashedPassword: hashPassword,
+	})
+	if err != nil {
+		log.Printf("Error updating user: %s", err)
+		respondWithError(w, 400, "Error updating user")
+		return
+	}
+
+	respondWithJSON(w, 200, databaseUpdateUserRowToUser(dbUser))
+}
+
 func main() {
 	godotenv.Load()
 
@@ -412,6 +467,8 @@ func main() {
 	mux.HandleFunc("POST /api/refresh", apiCfg.handlerRefresh)
 
 	mux.HandleFunc("POST /api/revoke", apiCfg.handlerRevoke)
+
+	mux.HandleFunc("PUT /api/users", apiCfg.handlerUpdateUser)
 
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
 
