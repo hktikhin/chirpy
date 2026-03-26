@@ -244,6 +244,56 @@ func (cfg *apiConfig) handlerGetChirpByID(w http.ResponseWriter, r *http.Request
 	respondWithJSON(w, 200, databaseChirpToChirp(dbChirp))
 }
 
+func (cfg *apiConfig) handlerDeleteChirpByID(w http.ResponseWriter, r *http.Request) {
+	rawID := r.PathValue("chirpID")
+	chirpID, err := uuid.Parse(rawID)
+	if err != nil {
+		respondWithError(w, 400, "Invalid chirp ID format")
+		return
+	}
+	signedToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error extracting api token: %s", err)
+		respondWithError(w, 401, fmt.Sprintf("Error extracting api token: %s", err))
+		return
+	}
+	userID, err := auth.ValidateJWT(signedToken, cfg.tokenSecret)
+	if err != nil {
+		log.Printf("Fail to validate api token: %s", err)
+		respondWithError(w, 401, "Fail to validate api token")
+		return
+	}
+	dbChirp, err := cfg.db.GetChirpByID(
+		r.Context(),
+		chirpID,
+	)
+	if err != nil {
+		log.Printf("Chirp with that id not found: %s", err)
+		respondWithError(w, 404, "Chirp with that id not found")
+		return
+	}
+	if dbChirp.UserID != userID {
+		log.Printf("Not permitted to delete the chirp")
+		respondWithError(w, 403, "Not permitted to delete the chirp")
+		return
+	}
+	rowsAffected, err := cfg.db.DeleteChirpByID(
+		r.Context(),
+		chirpID,
+	)
+	if rowsAffected == 0 {
+		log.Printf("Chirp with that id not found: %s", err)
+		respondWithError(w, 404, "Chirp with that id not found")
+		return
+	}
+	if err != nil {
+		log.Printf("Deleting Chirp with that id failed: %s", err)
+		respondWithError(w, 500, "Deleting Chirp with that id failed")
+		return
+	}
+	w.WriteHeader(204)
+}
+
 func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Email    string `json:"email"`
@@ -457,6 +507,8 @@ func main() {
 	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetChirps)
 
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerGetChirpByID)
+
+	mux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.handlerDeleteChirpByID)
 
 	mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
 
