@@ -27,10 +27,11 @@ type apiConfig struct {
 }
 
 type User struct {
-	ID        uuid.UUID `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Email     string    `json:"email"`
+	ID          uuid.UUID `json:"id"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	Email       string    `json:"email"`
+	IsChirpyRed bool      `json:"is_chirpy_red"`
 }
 
 type Chirp struct {
@@ -53,28 +54,31 @@ func databaseChirpToChirp(dbChirp database.Chirp) Chirp {
 
 func databaseCreateUserRowToUser(row database.CreateUserRow) User {
 	return User{
-		ID:        row.ID,
-		CreatedAt: row.CreatedAt,
-		UpdatedAt: row.UpdatedAt,
-		Email:     row.Email,
+		ID:          row.ID,
+		CreatedAt:   row.CreatedAt,
+		UpdatedAt:   row.UpdatedAt,
+		Email:       row.Email,
+		IsChirpyRed: row.IsChirpyRed,
 	}
 }
 
 func databaseUserToUser(dbUser database.User) User {
 	return User{
-		ID:        dbUser.ID,
-		CreatedAt: dbUser.CreatedAt,
-		UpdatedAt: dbUser.UpdatedAt,
-		Email:     dbUser.Email,
+		ID:          dbUser.ID,
+		CreatedAt:   dbUser.CreatedAt,
+		UpdatedAt:   dbUser.UpdatedAt,
+		Email:       dbUser.Email,
+		IsChirpyRed: dbUser.IsChirpyRed,
 	}
 }
 
 func databaseUpdateUserRowToUser(row database.UpdateUserRow) User {
 	return User{
-		ID:        row.ID,
-		CreatedAt: row.CreatedAt,
-		UpdatedAt: row.UpdatedAt,
-		Email:     row.Email,
+		ID:          row.ID,
+		CreatedAt:   row.CreatedAt,
+		UpdatedAt:   row.UpdatedAt,
+		Email:       row.Email,
+		IsChirpyRed: row.IsChirpyRed,
 	}
 }
 
@@ -416,6 +420,42 @@ func (cfg *apiConfig) handlerRefresh(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (cfg *apiConfig) handlerWebhook(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Event string `json:"event"`
+		Data  struct {
+			UserID uuid.UUID `json:"user_id"`
+		} `json:"data"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		log.Printf("Error decoding parameters: %s", err)
+		respondWithError(w, 400, "Invalid JSON")
+		return
+	}
+
+	if params.Event != "user.upgraded" {
+		log.Printf("Invalid Event")
+		respondWithError(w, 204, "Invalid Event")
+		return
+	}
+
+	rowsAffected, err := cfg.db.UpgradeUserToRed(r.Context(), params.Data.UserID)
+	if rowsAffected == 0 {
+		log.Printf("User with that id not existed.")
+		respondWithError(w, 404, "User with that id not existed.")
+		return
+	}
+	if err != nil {
+		log.Printf("Error Upgrading user to member: %s", err)
+		respondWithError(w, 401, "Error Upgrading user to member")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (cfg *apiConfig) handlerRevoke(w http.ResponseWriter, r *http.Request) {
 	refreshToken, err := auth.GetBearerToken(r.Header)
 	if err != nil {
@@ -519,6 +559,8 @@ func main() {
 	mux.HandleFunc("POST /api/refresh", apiCfg.handlerRefresh)
 
 	mux.HandleFunc("POST /api/revoke", apiCfg.handlerRevoke)
+
+	mux.HandleFunc("POST /api/polka/webhooks", apiCfg.handlerWebhook)
 
 	mux.HandleFunc("PUT /api/users", apiCfg.handlerUpdateUser)
 
