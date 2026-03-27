@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -239,6 +240,15 @@ func (cfg *apiConfig) handlerGetChirps(w http.ResponseWriter, r *http.Request) {
 	for _, dbChirp := range dbChirps {
 		chirps = append(chirps, databaseChirpToChirp(dbChirp))
 	}
+	sortDirection := r.URL.Query().Get("sort")
+	sort.Slice(chirps, func(i, j int) bool {
+		if sortDirection == "desc" {
+			// if i > j -> return true
+			return chirps[i].CreatedAt.After(chirps[j].CreatedAt)
+		}
+		// if i < j -> return true
+		return chirps[i].CreatedAt.Before(chirps[j].CreatedAt)
+	})
 
 	respondWithJSON(w, 200, chirps)
 }
