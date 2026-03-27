@@ -168,8 +168,7 @@ func getCleanedBody(body string) string {
 
 func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Body   string    `json:"body"`
-		UserID uuid.UUID `json:"user_id"`
+		Body string `json:"body"`
 	}
 	signedToken, err := auth.GetBearerToken(r.Header)
 	if err != nil {
@@ -177,7 +176,7 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, 401, fmt.Sprintf("Error extracting api token: %s", err))
 		return
 	}
-	_, err = auth.ValidateJWT(signedToken, cfg.tokenSecret)
+	UserID, err := auth.ValidateJWT(signedToken, cfg.tokenSecret)
 	if err != nil {
 		log.Printf("Fail to validate api token: %s", err)
 		respondWithError(w, 401, "Fail to validate api token")
@@ -200,7 +199,7 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 		r.Context(),
 		database.CreateChirpParams{
 			Body:   getCleanedBody(params.Body),
-			UserID: params.UserID,
+			UserID: UserID,
 		},
 	)
 	if err != nil {
@@ -212,9 +211,25 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 }
 
 func (cfg *apiConfig) handlerGetChirps(w http.ResponseWriter, r *http.Request) {
-	dbChirps, err := cfg.db.GetAllChirps(
-		r.Context(),
-	)
+	var dbChirps []database.Chirp
+	var err error
+
+	if rawAuthorID := r.URL.Query().Get("author_id"); rawAuthorID != "" {
+		authorID, err := uuid.Parse(rawAuthorID)
+		if err != nil {
+			respondWithError(w, 400, "Invalid author ID format")
+			return
+		}
+		dbChirps, err = cfg.db.GetChirpByAuthor(
+			r.Context(),
+			authorID,
+		)
+	} else {
+		dbChirps, err = cfg.db.GetAllChirps(
+			r.Context(),
+		)
+	}
+
 	if err != nil {
 		log.Printf("Could not get chirps: %s", err)
 		respondWithError(w, 500, "Could not get chirps")
