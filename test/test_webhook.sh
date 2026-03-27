@@ -2,12 +2,13 @@
 
 # =============================================================================
 #   Clean Test: POST /api/polka/webhooks - Chirpy Red Upgrade
-#   (No GET /api/users endpoint - using login + update pattern)
 # =============================================================================
 
 set -u
 
 BASE_URL="http://localhost:8080"
+# --- 使用你提供的具体 API KEY ---
+POLKA_KEY="xxxxx" 
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -18,12 +19,12 @@ echo -e "${YELLOW}=== TEST: POST /api/polka/webhooks (Chirpy Red Upgrade) ===${N
 echo "Started: $(date)"
 echo ""
 
-# 1. Reset Database
+# 1. 重置数据库
 echo "1. Resetting database..."
 curl -s -i -X POST "${BASE_URL}/admin/reset" | head -n 3
 echo ""
 
-# 2. Create test user
+# 2. 创建测试用户
 echo "2. Creating test user..."
 CREATE_RESP=$(curl -s -X POST "${BASE_URL}/api/users" \
   -H "Content-Type: application/json" \
@@ -43,10 +44,29 @@ fi
 echo -e "Created User ID : ${GREEN}$USER_ID${NC}"
 echo ""
 
-# 3. Send Polka Webhook (safe JSON)
-echo "3. Sending Polka webhook (user.upgraded)..."
+# 3a. 负面测试：验证 API Key 缺失或错误时是否报错 401
+echo "3a. Testing webhook WITHOUT/WRONG API Key (Should fail with 401)..."
+BAD_AUTH_RESP=$(curl -s -i -X POST "${BASE_URL}/api/polka/webhooks" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: ApiKey WRONG_KEY" \
+  -d "{
+    \"event\": \"user.upgraded\",
+    \"data\": { \"user_id\": \"$USER_ID\" }
+  }")
+
+if echo "$BAD_AUTH_RESP" | grep -q "401"; then
+  echo -e "${GREEN}✓ Correctly rejected invalid API Key (401)${NC}"
+else
+  echo -e "${RED}✗ SECURITY FAILURE: Server did not return 401 for bad key!${NC}"
+  exit 1
+fi
+echo ""
+
+# 3b. 正面测试：发送带有正确 API Key 的 Webhook
+echo "3b. Sending Polka webhook with VALID API Key..."
 WEBHOOK_RESP=$(curl -s -i -X POST "${BASE_URL}/api/polka/webhooks" \
   -H "Content-Type: application/json" \
+  -H "Authorization: ApiKey $POLKA_KEY" \
   --data-binary @- << EOF
 {
   "event": "user.upgraded",
@@ -57,19 +77,17 @@ WEBHOOK_RESP=$(curl -s -i -X POST "${BASE_URL}/api/polka/webhooks" \
 EOF
 )
 
-echo "$WEBHOOK_RESP" | head -n 12
-
 if echo "$WEBHOOK_RESP" | grep -q "204 No Content"; then
-  echo -e "${GREEN}✓ Webhook returned 204 No Content${NC}"
+  echo -e "${GREEN}✓ Webhook accepted (204 No Content)${NC}"
 else
-  echo -e "${RED}✗ Webhook failed${NC}"
-  echo "Full response:"
-  echo "$WEBHOOK_RESP"
+  echo -e "${RED}✗ Webhook failed with valid API Key${NC}"
+  echo "Server response:"
+  echo "$WEBHOOK_RESP" | head -n 15
   exit 1
 fi
 echo ""
 
-# 4. Login to get fresh token
+# 4. 登录以获取最新的 JWT Token
 echo "4. Logging in to get access token..."
 LOGIN_RESP=$(curl -s -X POST "${BASE_URL}/api/login" \
   -H "Content-Type: application/json" \
@@ -85,12 +103,11 @@ if [ -z "$TOKEN" ]; then
   echo "$LOGIN_RESP"
   exit 1
 fi
-
 echo -e "Access token acquired${NC}"
 echo ""
 
-# 5. Update user (using your existing PUT /api/users) to force a response that includes is_chirpy_red
-echo "5. Updating user via PUT /api/users to check is_chirpy_red..."
+# 5. 更新用户（或获取用户信息）验证 is_chirpy_red 是否为 true
+echo "5. Verifying user status (is_chirpy_red)..."
 UPDATE_RESP=$(curl -s -X PUT "${BASE_URL}/api/users" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
@@ -99,17 +116,11 @@ UPDATE_RESP=$(curl -s -X PUT "${BASE_URL}/api/users" \
     "password": "super-secret-2026"
   }')
 
-echo "$UPDATE_RESP"
-
 if echo "$UPDATE_RESP" | grep -q '"is_chirpy_red":true'; then
   echo -e "${GREEN}✓ SUCCESS: User is now Chirpy Red!${NC}"
-elif echo "$UPDATE_RESP" | grep -q '"is_chirpy_red":false'; then
-  echo -e "${RED}✗ Upgrade did NOT work - is_chirpy_red is still false${NC}"
 else
-  echo -e "${YELLOW}Warning: Could not find is_chirpy_red field in response${NC}"
-  echo "Response was:"
-  echo "$UPDATE_RESP"
+  echo -e "${RED}✗ Upgrade verification failed!${NC}"
+  echo "Response: $UPDATE_RESP"
 fi
 
-echo -e "\n${GREEN}Test completed.${NC}"
-echo "Check server logs for UpgradeUserToRed call."
+echo -e "\n${GREEN}Test sequence completed successfully.${NC}"

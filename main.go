@@ -24,6 +24,7 @@ type apiConfig struct {
 	db             *database.Queries
 	platform       string
 	tokenSecret    string
+	polkaKey       string
 }
 
 type User struct {
@@ -421,6 +422,18 @@ func (cfg *apiConfig) handlerRefresh(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) handlerWebhook(w http.ResponseWriter, r *http.Request) {
+	apiKey, err := auth.GetAPIKey(r.Header)
+	if err != nil {
+		log.Printf("Error extracting API Key: %s", err)
+		respondWithError(w, 401, fmt.Sprintf("Error extracting API Key: %s", err))
+		return
+	}
+	if apiKey != cfg.polkaKey {
+		log.Printf("Invalid API Key")
+		respondWithError(w, 401, "Invalid API Key")
+		return
+	}
+
 	type parameters struct {
 		Event string `json:"event"`
 		Data  struct {
@@ -429,7 +442,7 @@ func (cfg *apiConfig) handlerWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
-	err := decoder.Decode(&params)
+	err = decoder.Decode(&params)
 	if err != nil {
 		log.Printf("Error decoding parameters: %s", err)
 		respondWithError(w, 400, "Invalid JSON")
@@ -529,6 +542,7 @@ func main() {
 	dbURL := os.Getenv("DB_URL")
 	platform := os.Getenv("PLATFORM")
 	tokenSecret := os.Getenv("TOKEN_SECRET")
+	polkaKey := os.Getenv("POLKA_KEY")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		fmt.Printf("Error: %v", err)
@@ -537,7 +551,7 @@ func main() {
 	dbQueries := database.New(db)
 
 	mux := http.NewServeMux()
-	apiCfg := &apiConfig{db: dbQueries, platform: platform, tokenSecret: tokenSecret}
+	apiCfg := &apiConfig{db: dbQueries, platform: platform, tokenSecret: tokenSecret, polkaKey: polkaKey}
 
 	fsHandler := http.StripPrefix("/app/", http.FileServer(http.Dir(".")))
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(fsHandler))
